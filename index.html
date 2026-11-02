@@ -81,6 +81,15 @@
   .contact a { color: var(--encre); }
   footer { color: var(--pale); font-size: 12px; text-align: center; margin-top: 18px; }
   .cache { display: none !important; }
+  /* Signature au doigt (ou à la souris) */
+  .signature { position: relative; margin: 0 0 6px; }
+  .signature canvas { display: block; width: 100%; height: 170px; border-radius: 12px; border: 1px dashed #b9b9b3; background: #fff;
+    touch-action: none; cursor: crosshair; }
+  .signature canvas:focus-visible { outline: 2px solid var(--encre); outline-offset: 2px; }
+  .signature .invite { position: absolute; inset: 0; display: grid; place-items: center; color: var(--pale); font-size: 15px; pointer-events: none; }
+  .signature .effacer { position: absolute; top: 6px; right: 6px; min-height: 36px; padding: 4px 12px; border-radius: 10px; border: 0;
+    background: #f1f1ee; color: var(--doux); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .mention { color: var(--doux); font-size: 14px; margin: 0 0 4px; }
   .chargement { height: 180px; border-radius: var(--rayon); background: linear-gradient(90deg, #ececea 0%, #f4f4f2 50%, #ececea 100%);
     background-size: 200% 100%; animation: brille 1.2s linear infinite; }
   @keyframes brille { to { background-position: -200% 0; } }
@@ -175,7 +184,7 @@ function montrer() {
   const d = devis;
   document.title = "Devis " + d.numero + " · " + (d.entreprise?.nom || "");
   const rep = d.reponse;
-  if (rep && rep.decision === "accepte") return etat("ok", "✓", "Devis accepté", "Vous avez accepté ce devis le " + dateLongue(rep.le) + (rep.nom ? ", au nom de " + rep.nom : "") + ". Votre accord a été transmis à " + (d.entreprise?.nom || "l'entreprise") + ".", d);
+  if (rep && rep.decision === "accepte") return etat("ok", "✓", "Devis accepté", "Vous avez accepté " + (rep.signee ? "et signé " : "") + "ce devis le " + dateLongue(rep.le) + (rep.nom ? ", au nom de " + rep.nom : "") + ". Votre accord a été transmis à " + (d.entreprise?.nom || "l'entreprise") + ".", d);
   if (rep && rep.decision === "refuse") return etat("non", "✕", "Devis refusé", "Vous avez refusé ce devis le " + dateLongue(rep.le) + ". Merci de votre réponse.", d);
   if (d.remplace) return etat("info", "↻", "Ce devis a été mis à jour", (d.entreprise?.nom || "L'entreprise") + " vous a envoyé une nouvelle version. Ouvrez le lien de son dernier message.", d);
   if (d.expire) return etat("non", "⌛", "Ce devis n'est plus valable", "Il était valable jusqu'au " + dateLongue(d.valide_jusqu_au) + ". Contactez " + (d.entreprise?.nom || "l'entreprise") + " pour un devis à jour.", d);
@@ -233,17 +242,24 @@ function formulaire(decision) {
   if (decision === "accepte") {
     const nom = el("input", { type: "text", id: "nom", autocomplete: "name", autocapitalize: "words", enterkeyhint: "done", placeholder: "Prénom et nom" });
     const accord = el("input", { type: "checkbox", id: "accord" });
+    const trace = signature();
     bouton = el("button", { class: "bouton principal", type: "submit" }, "Confirmer mon accord");
     champs = [
       el("h2", {}, "Accepter le devis " + d.numero),
       el("label", { for: "nom" }, "Votre nom"), nom,
       el("label", { class: "case", for: "accord" }, accord,
         el("span", {}, "Bon pour accord : j'accepte ce devis de " + euros(d.totaux?.ttc) + " TTC et ses conditions.")),
+      el("label", {}, "Votre signature"),
+      el("p", { class: "mention" }, "Bon pour accord, le " + dateLongue(new Date().toISOString())),
+      trace.bloc,
     ];
     return monter(zone, champs, bouton, erreur, retour, () => {
       if (nom.value.trim().length < 2) return "Saisissez votre nom.";
       if (!accord.checked) return "Cochez « Bon pour accord ».";
-      return { decision, nom: nom.value.trim(), bon_pour_accord: true };
+      if (trace.vide()) return "Signez dans le cadre, avec le doigt ou la souris.";
+      const image = trace.png();
+      if (!image) return "Signature trop détaillée. Effacez-la et signez de nouveau.";
+      return { decision, nom: nom.value.trim(), bon_pour_accord: true, signature: image };
     });
   }
   const modif = decision === "modification";
@@ -260,6 +276,85 @@ function formulaire(decision) {
   });
 }
 
+/** Cadre de signature au doigt : tracé lissé, « Effacer », image PNG (fond transparent, 600 px de large au plus, 150 Ko au plus) */
+function signature() {
+  const toile = el("canvas", { id: "trace", role: "img", tabindex: "0", "aria-label": "Cadre de signature : signez avec le doigt ou la souris" });
+  const invite = el("span", { class: "invite", "aria-hidden": "true" }, "Signez ici");
+  const effacer = el("button", { class: "effacer", type: "button" }, "Effacer");
+  const bloc = el("div", { class: "signature" }, toile, invite, effacer);
+  const traits = [];
+  let encours = null;
+  let echelle = 1;
+
+  function dimensionner() {
+    const r = toile.getBoundingClientRect();
+    if (!r.width) return;
+    echelle = Math.min(window.devicePixelRatio || 1, 2);
+    toile.width = Math.round(r.width * echelle);
+    toile.height = Math.round(r.height * echelle);
+    dessiner();
+  }
+  function dessiner() {
+    const c = toile.getContext("2d");
+    c.clearRect(0, 0, toile.width, toile.height);
+    c.lineCap = "round"; c.lineJoin = "round"; c.strokeStyle = "#15161b"; c.lineWidth = 2.4 * echelle;
+    for (const t of traits) {
+      c.beginPath();
+      t.forEach((p, i) => (i ? c.lineTo(p.x * echelle, p.y * echelle) : c.moveTo(p.x * echelle, p.y * echelle)));
+      if (t.length === 1) c.lineTo(t[0].x * echelle + 0.1, t[0].y * echelle);
+      c.stroke();
+    }
+  }
+  function point(ev) {
+    const r = toile.getBoundingClientRect();
+    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  }
+  toile.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    toile.setPointerCapture(ev.pointerId);
+    encours = [point(ev)];
+    traits.push(encours);
+    invite.classList.add("cache");
+    dessiner();
+  });
+  toile.addEventListener("pointermove", (ev) => {
+    if (!encours) return;
+    for (const e of (ev.getCoalescedEvents ? ev.getCoalescedEvents() : [ev])) encours.push(point(e));
+    dessiner();
+  });
+  const fin = () => { encours = null; };
+  toile.addEventListener("pointerup", fin);
+  toile.addEventListener("pointercancel", fin);
+  effacer.addEventListener("click", () => { traits.length = 0; invite.classList.remove("cache"); dessiner(); });
+  new ResizeObserver(dimensionner).observe(toile);
+
+  return {
+    bloc,
+    /** Moins de 6 points en tout : pas une signature */
+    vide: () => traits.reduce((n, t) => n + t.length, 0) < 6,
+    png() {
+      const r = toile.getBoundingClientRect();
+      for (const largeur of [600, 420, 300]) {
+        const k = Math.min(1, largeur / r.width);
+        const sortie = document.createElement("canvas");
+        sortie.width = Math.round(r.width * k);
+        sortie.height = Math.round(r.height * k);
+        const c = sortie.getContext("2d");
+        c.lineCap = "round"; c.lineJoin = "round"; c.strokeStyle = "#15161b"; c.lineWidth = Math.max(1.5, 2.4 * k);
+        for (const t of traits) {
+          c.beginPath();
+          t.forEach((p, i) => (i ? c.lineTo(p.x * k, p.y * k) : c.moveTo(p.x * k, p.y * k)));
+          if (t.length === 1) c.lineTo(t[0].x * k + 0.1, t[0].y * k);
+          c.stroke();
+        }
+        const url = sortie.toDataURL("image/png");
+        if (url.length <= 200000) return url;
+      }
+      return null;
+    },
+  };
+}
+
 function monter(zone, champs, bouton, erreur, retour, lire) {
   const form = el("form", { novalidate: true }, ...champs, bouton, erreur, retour);
   form.addEventListener("submit", async (ev) => {
@@ -273,7 +368,7 @@ function monter(zone, champs, bouton, erreur, retour, lire) {
       const r = await fetch(API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "repondre", t: jeton, ...v }) });
       const j = await r.json().catch(() => ({}));
       if (r.ok || j.code === "deja") {
-        devis.reponse = { decision: j.decision || v.decision, nom: v.nom || "", le: j.repondu_le || new Date().toISOString() };
+        devis.reponse = { decision: j.decision || v.decision, nom: v.nom || "", le: j.repondu_le || new Date().toISOString(), signee: !!v.signature };
         return confirmation(devis.reponse.decision);
       }
       if (j.code === "expire") { devis.expire = true; return montrer(); }
@@ -293,7 +388,7 @@ function monter(zone, champs, bouton, erreur, retour, lire) {
 function confirmation(decision) {
   const d = devis;
   const nomE = d.entreprise?.nom || "l'entreprise";
-  if (decision === "accepte") return etat("ok", "✓", "Merci, devis accepté", "Votre accord est transmis à " + nomE + ", qui revient vers vous pour la suite. Vous pouvez fermer cette page.", d);
+  if (decision === "accepte") return etat("ok", "✓", "Merci, devis accepté", "Votre accord signé est transmis à " + nomE + ", qui revient vers vous pour la suite. Vous pouvez fermer cette page.", d);
   if (decision === "refuse") return etat("non", "✕", "Réponse envoyée", "Votre réponse est transmise à " + nomE + ". Merci d'avoir pris le temps de répondre.", d);
   return etat("info", "✎", "Demande envoyée", "Votre demande est transmise à " + nomE + ", qui vous enverra un devis mis à jour.", d);
 }
