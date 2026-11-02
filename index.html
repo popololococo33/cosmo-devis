@@ -186,6 +186,7 @@ function montrer() {
   const rep = d.reponse;
   if (rep && rep.decision === "accepte") return etat("ok", "✓", "Devis accepté", "Vous avez accepté " + (rep.signee ? "et signé " : "") + "ce devis le " + dateLongue(rep.le) + (rep.nom ? ", au nom de " + rep.nom : "") + ". Votre accord a été transmis à " + (d.entreprise?.nom || "l'entreprise") + ".", d);
   if (rep && rep.decision === "refuse") return etat("non", "✕", "Devis refusé", "Vous avez refusé ce devis le " + dateLongue(rep.le) + ". Merci de votre réponse.", d);
+  if (d.clos) return etat("non", "!", "Ce devis n'est plus disponible", "Il a été clôturé par " + (d.entreprise?.nom || "l'entreprise") + ". Pour toute question, contactez-la directement.", d);
   if (d.remplace) return etat("info", "↻", "Ce devis a été mis à jour", (d.entreprise?.nom || "L'entreprise") + " vous a envoyé une nouvelle version. Ouvrez le lien de son dernier message.", d);
   if (d.expire) return etat("non", "⌛", "Ce devis n'est plus valable", "Il était valable jusqu'au " + dateLongue(d.valide_jusqu_au) + ". Contactez " + (d.entreprise?.nom || "l'entreprise") + " pour un devis à jour.", d);
 
@@ -372,6 +373,7 @@ function monter(zone, champs, bouton, erreur, retour, lire) {
         return confirmation(devis.reponse.decision);
       }
       if (j.code === "expire") { devis.expire = true; return montrer(); }
+      if (j.code === "clos") { devis.clos = true; return montrer(); }
       if (j.code === "remplace") { devis.remplace = true; return montrer(); }
       erreur.textContent = j.error || "L'envoi n'a pas abouti. Réessayez.";
     } catch {
